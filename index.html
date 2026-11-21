@@ -10,7 +10,6 @@
       background: #0b0e14;
       color: #e6edf3;
       font-family: 'Segoe UI', system-ui, sans-serif;
-      line-height: 1.5;
       padding: 20px;
       min-height: 100vh;
     }
@@ -33,7 +32,7 @@
       border-radius: 6px;
       font-size: 0.95rem;
     }
-    input { width: 260px; max-width: 100%; }
+    input { width: 280px; max-width: 100%; }
     button {
       background: #238636;
       border-color: #2ea043;
@@ -78,7 +77,7 @@
     .commodity { color: #ffa657; }
     .empty { text-align: center; padding: 40px; color: #8b949e; }
     .debug {
-      margin-top: 20px;
+      margin-top: 18px;
       padding: 12px;
       background: #0d1117;
       border: 1px solid #30363d;
@@ -86,7 +85,7 @@
       font-size: 0.8rem;
       color: #8b949e;
       white-space: pre-wrap;
-      max-height: 200px;
+      max-height: 180px;
       overflow: auto;
     }
   </style>
@@ -105,12 +104,13 @@
     </div>
 
     <div id="status" class="status" style="display:none;"></div>
-    <div id="results"><div class="empty">Paste token and hit Load</div></div>
+    <div id="results"><div class="empty">Paste token and hit Load Routes</div></div>
     <div id="debug" class="debug" style="display:none;"></div>
   </div>
 
   <script>
-    const PROXY = "https://corsproxy.io/?";
+    // Different proxy that usually handles Authorization better
+    const PROXY = "https://api.allorigins.win/raw?url=";
     const API = "https://api.uexcorp.uk/2.0";
 
     async function loadRoutes() {
@@ -125,77 +125,91 @@
       }
 
       btn.disabled = true;
-      showStatus("Loading data from UEX...", false);
+      showStatus("Loading...", false);
       results.innerHTML = `<div class="empty">Working...</div>`;
       debug.style.display = "none";
 
       try {
-        // First get list of commodities that actually exist
-        const comRes = await fetch(PROXY + encodeURIComponent(API + "/commodities"), {
-          headers: { "Authorization": "Bearer " + token }
+        // Test the commodities list first
+        const testUrl = PROXY + encodeURIComponent(API + "/commodities");
+        const testRes = await fetch(testUrl, {
+          headers: {
+            "Authorization": "Bearer " + token,
+            "Accept": "application/json"
+          }
         });
 
-        const comJson = await comRes.json();
-        console.log("Commodities response:", comJson);
-
-        if (comJson.status !== "ok" || !comJson.data) {
-          throw new Error("Could not load commodities list. Token might be wrong or API blocked.");
+        const testText = await testRes.text();
+        let testJson;
+        try {
+          testJson = JSON.parse(testText);
+        } catch (e) {
+          throw new Error("Proxy returned non-JSON. Response starts with: " + testText.slice(0, 120));
         }
 
-        // Take first 40 commodities to sample routes from
-        const commodities = comJson.data.slice(0, 40);
+        if (testJson.status !== "ok" || !testJson.data) {
+          throw new Error("Token rejected or API error: " + (testJson.message || testJson.status || "unknown"));
+        }
+
+        // We got commodities – now pull routes from the first 25
+        const commodities = testJson.data.slice(0, 25);
         let allRoutes = [];
 
         for (const c of commodities) {
           try {
-            const url = API + "/commodities_routes?id_commodity=" + c.id;
-            const r = await fetch(PROXY + encodeURIComponent(url), {
-              headers: { "Authorization": "Bearer " + token }
+            const routeUrl = PROXY + encodeURIComponent(API + "/commodities_routes?id_commodity=" + c.id);
+            const r = await fetch(routeUrl, {
+              headers: {
+                "Authorization": "Bearer " + token,
+                "Accept": "application/json"
+              }
             });
             const j = await r.json();
             if (j.status === "ok" && Array.isArray(j.data)) {
-              allRoutes = allRoutes.concat(j.data.map(route => ({
-                ...route,
-                commodity_name: c.name || c.id
-              })));
+              j.data.forEach(route => {
+                allRoutes.push({
+                  ...route,
+                  commodity_name: c.name || ("ID " + c.id)
+                });
+              });
             }
           } catch (e) {
-            // skip failed ones
+            // skip individual failures
           }
         }
 
-        // Remove exact duplicates
+        // Dedupe
         const seen = new Set();
         allRoutes = allRoutes.filter(r => {
-          const key = r.id_commodity + "-" + r.id_terminal_origin + "-" + r.id_terminal_destination;
+          const key = `${r.id_commodity}-${r.id_terminal_origin}-${r.id_terminal_destination}`;
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
         });
 
-        // Very loose filter so something shows up
+        // Loose filter
         let routes = allRoutes.filter(r => {
           const trips = (r.price_origin_users_rows || 0) + (r.price_destination_users_rows || 0);
           const margin = r.price_margin || 0;
-          return margin > 50 || trips > 0;   // almost anything with some value or traffic
+          return margin > 30 || trips >= 1;
         });
 
-        // Sort by profit then traffic
+        // Sort by value + traffic
         routes.sort((a, b) => {
-          const scoreA = (a.price_margin || 0) * 10 + ((a.price_origin_users_rows || 0) + (a.price_destination_users_rows || 0));
-          const scoreB = (b.price_margin || 0) * 10 + ((b.price_origin_users_rows || 0) + (b.price_destination_users_rows || 0));
+          const scoreA = (a.price_margin || 0) * 8 + ((a.price_origin_users_rows || 0) + (a.price_destination_users_rows || 0));
+          const scoreB = (b.price_margin || 0) * 8 + ((b.price_origin_users_rows || 0) + (b.price_destination_users_rows || 0));
           return scoreB - scoreA;
         });
 
         routes = routes.slice(0, 40);
 
-        // Debug info
+        // Debug
         debug.style.display = "block";
-        debug.textContent = `Total routes pulled: ${allRoutes.length}\nAfter filter: ${routes.length}\nSample commodity names: ${commodities.slice(0,5).map(c => c.name).join(", ")}`;
+        debug.textContent = `Commodities loaded: ${testJson.data.length}\nRoutes pulled: ${allRoutes.length}\nAfter filter: ${routes.length}`;
 
         if (routes.length === 0) {
-          results.innerHTML = `<div class="empty">Still no routes. Check the debug box below and tell me what it says.</div>`;
-          showStatus("No usable routes found", true);
+          results.innerHTML = `<div class="empty">No routes after filtering. Check debug info.</div>`;
+          showStatus("No matching routes", true);
           return;
         }
 
@@ -203,8 +217,8 @@
           <thead>
             <tr>
               <th>Commodity</th>
-              <th>Origin → Destination</th>
-              <th>Profit/SCU</th>
+              <th>Origin → Dest</th>
+              <th>Profit / SCU</th>
               <th>Traffic</th>
             </tr>
           </thead>
@@ -214,7 +228,7 @@
           const trips = (r.price_origin_users_rows || 0) + (r.price_destination_users_rows || 0);
           const margin = Math.round(r.price_margin || 0);
           html += `<tr>
-            <td class="commodity">${r.commodity_name || r.id_commodity}</td>
+            <td class="commodity">${r.commodity_name}</td>
             <td>${r.id_terminal_origin || "?"} → ${r.id_terminal_destination || "?"}</td>
             <td class="profit">${margin.toLocaleString()}</td>
             <td class="volume">${trips}</td>
@@ -223,14 +237,14 @@
 
         html += `</tbody></table>`;
         results.innerHTML = html;
-        showStatus(`Found ${routes.length} routes`, false);
+        showStatus(`Showing ${routes.length} routes`, false);
 
       } catch (err) {
         console.error(err);
-        results.innerHTML = `<div class="empty">Error happened</div>`;
+        results.innerHTML = `<div class="empty">Error</div>`;
         showStatus(err.message, true);
         debug.style.display = "block";
-        debug.textContent = err.stack || err.message;
+        debug.textContent = err.message;
       } finally {
         btn.disabled = false;
       }
@@ -243,7 +257,7 @@
       el.className = "status " + (isError ? "error" : "ok");
     }
 
-    // remember token
+    // Remember token
     const saved = localStorage.getItem("uex_token");
     if (saved) document.getElementById("token").value = saved;
     document.getElementById("token").addEventListener("change", e => {
