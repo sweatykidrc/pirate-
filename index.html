@@ -15,21 +15,17 @@
       min-height: 100vh;
     }
     .container { max-width: 1100px; margin: 0 auto; }
-    h1 {
-      font-size: 1.8rem;
-      margin-bottom: 6px;
-      color: #ff6b6b;
-    }
+    h1 { font-size: 1.8rem; margin-bottom: 6px; color: #ff6b6b; }
     .subtitle { color: #8b949e; margin-bottom: 24px; font-size: 0.95rem; }
     .controls {
       display: flex;
       flex-wrap: wrap;
       gap: 12px;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
       align-items: end;
     }
     label { display: block; font-size: 0.8rem; color: #8b949e; margin-bottom: 4px; }
-    input, select, button {
+    input, button {
       background: #161b22;
       border: 1px solid #30363d;
       color: #e6edf3;
@@ -37,7 +33,7 @@
       border-radius: 6px;
       font-size: 0.95rem;
     }
-    input { width: 280px; max-width: 100%; }
+    input { width: 260px; max-width: 100%; }
     button {
       background: #238636;
       border-color: #2ea043;
@@ -65,7 +61,7 @@
       font-size: 0.9rem;
     }
     th, td {
-      padding: 12px 14px;
+      padding: 11px 13px;
       text-align: left;
       border-bottom: 1px solid #21262d;
     }
@@ -73,177 +69,168 @@
       background: #0d1117;
       color: #8b949e;
       font-weight: 600;
-      font-size: 0.8rem;
+      font-size: 0.78rem;
       text-transform: uppercase;
-      letter-spacing: 0.03em;
     }
     tr:hover { background: #1c2128; }
     .profit { color: #3fb950; font-weight: 600; }
     .volume { color: #58a6ff; }
-    .route { font-weight: 500; }
     .commodity { color: #ffa657; }
-    .empty {
-      text-align: center;
-      padding: 40px;
-      color: #8b949e;
-    }
-    .footer {
-      margin-top: 30px;
+    .empty { text-align: center; padding: 40px; color: #8b949e; }
+    .debug {
+      margin-top: 20px;
+      padding: 12px;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
       font-size: 0.8rem;
       color: #8b949e;
-      text-align: center;
+      white-space: pre-wrap;
+      max-height: 200px;
+      overflow: auto;
     }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Pirate Camp Radar</h1>
-    <p class="subtitle">High value routes that people are actually hauling • Powered by UEX</p>
+    <p class="subtitle">High value + real traffic routes</p>
 
     <div class="controls">
       <div>
         <label>UEX API Token</label>
-        <input type="password" id="token" placeholder="Paste your Bearer token here" />
+        <input type="password" id="token" placeholder="Paste token here" />
       </div>
-      <div>
-        <label>Min Profit / SCU</label>
-        <input type="number" id="minProfit" value="600" style="width:100px" />
-      </div>
-      <div>
-        <label>Min Trips</label>
-        <input type="number" id="minTrips" value="2" style="width:80px" />
-      </div>
-      <button id="loadBtn" onclick="loadRoutes()">Load Best Camps</button>
+      <button id="loadBtn" onclick="loadRoutes()">Load Routes</button>
     </div>
 
     <div id="status" class="status" style="display:none;"></div>
-
-    <div id="results">
-      <div class="empty">Paste your UEX token and hit Load Best Camps</div>
-    </div>
-
-    <div class="footer">
-      Personal tool • High value + real traffic only
-    </div>
+    <div id="results"><div class="empty">Paste token and hit Load</div></div>
+    <div id="debug" class="debug" style="display:none;"></div>
   </div>
 
   <script>
-    // Using a CORS proxy so it works from GitHub Pages
     const PROXY = "https://corsproxy.io/?";
-    const API_BASE = "https://api.uexcorp.uk/2.0";
+    const API = "https://api.uexcorp.uk/2.0";
 
     async function loadRoutes() {
       const token = document.getElementById("token").value.trim();
-      const minProfit = Number(document.getElementById("minProfit").value) || 0;
-      const minTrips = Number(document.getElementById("minTrips").value) || 0;
-      const statusEl = document.getElementById("status");
-      const resultsEl = document.getElementById("results");
       const btn = document.getElementById("loadBtn");
+      const results = document.getElementById("results");
+      const debug = document.getElementById("debug");
 
       if (!token) {
-        showStatus("Paste your UEX API token first", true);
+        showStatus("Paste your token first", true);
         return;
       }
 
       btn.disabled = true;
-      showStatus("Fetching routes...", false);
-      resultsEl.innerHTML = `<div class="empty">Loading...</div>`;
+      showStatus("Loading data from UEX...", false);
+      results.innerHTML = `<div class="empty">Working...</div>`;
+      debug.style.display = "none";
 
       try {
-        // We request a few high-traffic commodities to get real routes
-        // Using a practical set that usually has activity
-        const commodityIds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30]; // broad sample
+        // First get list of commodities that actually exist
+        const comRes = await fetch(PROXY + encodeURIComponent(API + "/commodities"), {
+          headers: { "Authorization": "Bearer " + token }
+        });
 
+        const comJson = await comRes.json();
+        console.log("Commodities response:", comJson);
+
+        if (comJson.status !== "ok" || !comJson.data) {
+          throw new Error("Could not load commodities list. Token might be wrong or API blocked.");
+        }
+
+        // Take first 40 commodities to sample routes from
+        const commodities = comJson.data.slice(0, 40);
         let allRoutes = [];
 
-        for (const id of commodityIds) {
-          const url = `${API_BASE}/commodities_routes?id_commodity=${id}`;
-          const res = await fetch(PROXY + encodeURIComponent(url), {
-            headers: {
-              "Authorization": `Bearer ${token}`,
-              "Accept": "application/json"
+        for (const c of commodities) {
+          try {
+            const url = API + "/commodities_routes?id_commodity=" + c.id;
+            const r = await fetch(PROXY + encodeURIComponent(url), {
+              headers: { "Authorization": "Bearer " + token }
+            });
+            const j = await r.json();
+            if (j.status === "ok" && Array.isArray(j.data)) {
+              allRoutes = allRoutes.concat(j.data.map(route => ({
+                ...route,
+                commodity_name: c.name || c.id
+              })));
             }
-          });
-
-          if (!res.ok) continue;
-
-          const json = await res.json();
-          if (json.status === "ok" && Array.isArray(json.data)) {
-            allRoutes = allRoutes.concat(json.data);
+          } catch (e) {
+            // skip failed ones
           }
         }
 
-        // Remove duplicates
+        // Remove exact duplicates
         const seen = new Set();
         allRoutes = allRoutes.filter(r => {
-          const key = `${r.id_commodity}-${r.id_terminal_origin}-${r.id_terminal_destination}`;
+          const key = r.id_commodity + "-" + r.id_terminal_origin + "-" + r.id_terminal_destination;
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
         });
 
-        // Filter: real traffic + decent profit
+        // Very loose filter so something shows up
         let routes = allRoutes.filter(r => {
           const trips = (r.price_origin_users_rows || 0) + (r.price_destination_users_rows || 0);
           const margin = r.price_margin || 0;
-          return trips >= minTrips && margin >= minProfit;
+          return margin > 50 || trips > 0;   // almost anything with some value or traffic
         });
 
-        // Score = profit * log(traffic)
+        // Sort by profit then traffic
         routes.sort((a, b) => {
-          const tripsA = (a.price_origin_users_rows || 0) + (a.price_destination_users_rows || 0);
-          const tripsB = (b.price_origin_users_rows || 0) + (b.price_destination_users_rows || 0);
-          const scoreA = (a.price_margin || 0) * Math.log10(tripsA + 2);
-          const scoreB = (b.price_margin || 0) * Math.log10(tripsB + 2);
+          const scoreA = (a.price_margin || 0) * 10 + ((a.price_origin_users_rows || 0) + (a.price_destination_users_rows || 0));
+          const scoreB = (b.price_margin || 0) * 10 + ((b.price_origin_users_rows || 0) + (b.price_destination_users_rows || 0));
           return scoreB - scoreA;
         });
 
-        routes = routes.slice(0, 50);
+        routes = routes.slice(0, 40);
+
+        // Debug info
+        debug.style.display = "block";
+        debug.textContent = `Total routes pulled: ${allRoutes.length}\nAfter filter: ${routes.length}\nSample commodity names: ${commodities.slice(0,5).map(c => c.name).join(", ")}`;
 
         if (routes.length === 0) {
-          resultsEl.innerHTML = `<div class="empty">No routes matched. Try lowering Min Profit or Min Trips.</div>`;
-          showStatus("No matching routes found", true);
+          results.innerHTML = `<div class="empty">Still no routes. Check the debug box below and tell me what it says.</div>`;
+          showStatus("No usable routes found", true);
           return;
         }
 
-        let html = `
-          <table>
-            <thead>
-              <tr>
-                <th>Commodity ID</th>
-                <th>Route (Origin → Dest)</th>
-                <th>Profit / SCU</th>
-                <th>Traffic</th>
-                <th>ROI</th>
-              </tr>
-            </thead>
-            <tbody>
-        `;
+        let html = `<table>
+          <thead>
+            <tr>
+              <th>Commodity</th>
+              <th>Origin → Destination</th>
+              <th>Profit/SCU</th>
+              <th>Traffic</th>
+            </tr>
+          </thead>
+          <tbody>`;
 
         for (const r of routes) {
           const trips = (r.price_origin_users_rows || 0) + (r.price_destination_users_rows || 0);
           const margin = Math.round(r.price_margin || 0);
-          const roi = r.price_roi ? (r.price_roi * 100).toFixed(0) + "%" : "—";
-
-          html += `
-            <tr>
-              <td class="commodity">${r.id_commodity || "?"}</td>
-              <td class="route">${r.id_terminal_origin || "?"} → ${r.id_terminal_destination || "?"}</td>
-              <td class="profit">${margin.toLocaleString()} aUEC</td>
-              <td class="volume">${trips} trips</td>
-              <td>${roi}</td>
-            </tr>
-          `;
+          html += `<tr>
+            <td class="commodity">${r.commodity_name || r.id_commodity}</td>
+            <td>${r.id_terminal_origin || "?"} → ${r.id_terminal_destination || "?"}</td>
+            <td class="profit">${margin.toLocaleString()}</td>
+            <td class="volume">${trips}</td>
+          </tr>`;
         }
 
         html += `</tbody></table>`;
-        resultsEl.innerHTML = html;
-        showStatus(`Showing ${routes.length} high-value routes with real traffic`, false);
+        results.innerHTML = html;
+        showStatus(`Found ${routes.length} routes`, false);
 
       } catch (err) {
         console.error(err);
-        resultsEl.innerHTML = `<div class="empty">Failed to load</div>`;
-        showStatus("Error: " + err.message, true);
+        results.innerHTML = `<div class="empty">Error happened</div>`;
+        showStatus(err.message, true);
+        debug.style.display = "block";
+        debug.textContent = err.stack || err.message;
       } finally {
         btn.disabled = false;
       }
@@ -256,7 +243,7 @@
       el.className = "status " + (isError ? "error" : "ok");
     }
 
-    // Remember token
+    // remember token
     const saved = localStorage.getItem("uex_token");
     if (saved) document.getElementById("token").value = saved;
     document.getElementById("token").addEventListener("change", e => {
