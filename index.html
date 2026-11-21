@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Pirate Camp Radar</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0b0e14;
+      color: #e6edf3;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      line-height: 1.5;
+      padding: 20px;
+      min-height: 100vh;
+    }
+    .container { max-width: 1100px; margin: 0 auto; }
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 6px;
+      color: #ff6b6b;
+    }
+    .subtitle { color: #8b949e; margin-bottom: 24px; font-size: 0.95rem; }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 24px;
+      align-items: end;
+    }
+    label { display: block; font-size: 0.8rem; color: #8b949e; margin-bottom: 4px; }
+    input, select, button {
+      background: #161b22;
+      border: 1px solid #30363d;
+      color: #e6edf3;
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 0.95rem;
+    }
+    input { width: 280px; }
+    button {
+      background: #238636;
+      border-color: #2ea043;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:hover { background: #2ea043; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status {
+      margin-bottom: 16px;
+      padding: 10px 14px;
+      border-radius: 6px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      font-size: 0.9rem;
+    }
+    .status.error { border-color: #f85149; color: #f85149; }
+    .status.ok { border-color: #3fb950; color: #3fb950; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #161b22;
+      border-radius: 8px;
+      overflow: hidden;
+      font-size: 0.9rem;
+    }
+    th, td {
+      padding: 12px 14px;
+      text-align: left;
+      border-bottom: 1px solid #21262d;
+    }
+    th {
+      background: #0d1117;
+      color: #8b949e;
+      font-weight: 600;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    tr:hover { background: #1c2128; }
+    .profit { color: #3fb950; font-weight: 600; }
+    .volume { color: #58a6ff; }
+    .route { font-weight: 500; }
+    .commodity { color: #ffa657; }
+    .empty {
+      text-align: center;
+      padding: 40px;
+      color: #8b949e;
+    }
+    .footer {
+      margin-top: 30px;
+      font-size: 0.8rem;
+      color: #8b949e;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Pirate Camp Radar</h1>
+    <p class="subtitle">High value routes that people are actually hauling • Powered by UEX</p>
+
+    <div class="controls">
+      <div>
+        <label>UEX API Token</label>
+        <input type="password" id="token" placeholder="Paste your Bearer token here" />
+      </div>
+      <div>
+        <label>Min Profit / SCU</label>
+        <input type="number" id="minProfit" value="800" style="width:100px" />
+      </div>
+      <div>
+        <label>Min Trips (traffic)</label>
+        <input type="number" id="minTrips" value="3" style="width:80px" />
+      </div>
+      <button id="loadBtn" onclick="loadRoutes()">Load Best Camps</button>
+    </div>
+
+    <div id="status" class="status" style="display:none;"></div>
+
+    <div id="results">
+      <div class="empty">Paste your UEX token and hit Load Best Camps</div>
+    </div>
+
+    <div class="footer">
+      Personal tool • Filters for real traffic + high value • Not affiliated with CIG or UEX
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = "https://api.uexcorp.uk/2.0";
+
+    async function loadRoutes() {
+      const token = document.getElementById("token").value.trim();
+      const minProfit = Number(document.getElementById("minProfit").value) || 0;
+      const minTrips = Number(document.getElementById("minTrips").value) || 0;
+      const statusEl = document.getElementById("status");
+      const resultsEl = document.getElementById("results");
+      const btn = document.getElementById("loadBtn");
+
+      if (!token) {
+        showStatus("Paste your UEX API token first", true);
+        return;
+      }
+
+      btn.disabled = true;
+      showStatus("Fetching routes from UEX...", false);
+      resultsEl.innerHTML = `<div class="empty">Loading...</div>`;
+
+      try {
+        // Get routes (we pull a broad set and filter client-side)
+        const res = await fetch(`${API_BASE}/commodities_routes?id_commodity=1`, {
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Accept": "application/json"
+          }
+        });
+
+        // Note: the commodities_routes endpoint works better when you query without forcing id_commodity=1
+        // We'll do a second more useful call for ranking
+
+        // Better approach: get commodities averages / ranking style data + routes
+        // For reliability we pull commodities_routes with a known high-traffic commodity first,
+        // then expand. For a clean first version we use a practical method:
+
+        const routesRes = await fetch(`${API_BASE}/commodities_routes`, {
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Accept": "application/json"
+          }
+        });
+
+        if (!routesRes.ok) {
+          throw new Error(`API error ${routesRes.status} – check your token`);
+        }
+
+        const json = await routesRes.json();
+
+        if (json.status !== "ok" || !json.data) {
+          throw new Error(json.message || "No data returned");
+        }
+
+        let routes = json.data;
+
+        // Filter: real traffic + decent profit
+        routes = routes.filter(r => {
+          const trips = (r.price_origin_users_rows || 0) + (r.price_destination_users_rows || 0);
+          const margin = r.price_margin || 0;
+          return trips >= minTrips && margin >= minProfit;
+        });
+
+        // Sort by a combined score: profit * log(traffic)
+        routes.sort((a, b) => {
+          const tripsA = (a.price_origin_users_rows || 0) + (a.price_destination_users_rows || 0);
+          const tripsB = (b.price_origin_users_rows || 0) + (b.price_destination_users_rows || 0);
+          const scoreA = (a.price_margin || 0) * Math.log10(tripsA + 2);
+          const scoreB = (b.price_margin || 0) * Math.log10(tripsB + 2);
+          return scoreB - scoreA;
+        });
+
+        // Keep top 40
+        routes = routes.slice(0, 40);
+
+        if (routes.length === 0) {
+          resultsEl.innerHTML = `<div class="empty">No routes matched your filters. Try lowering Min Profit or Min Trips.</div>`;
+          showStatus("No matching routes", true);
+          return;
+        }
+
+        // Build table
+        let html = `
+          <table>
+            <thead>
+              <tr>
+                <th>Commodity</th>
+                <th>Route</th>
+                <th>Profit / SCU</th>
+                <th>Traffic (trips)</th>
+                <th>ROI</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+
+        for (const r of routes) {
+          const trips = (r.price_origin_users_rows || 0) + (r.price_destination_users_rows || 0);
+          const origin = r.id_terminal_origin || "?";
+          const dest = r.id_terminal_destination || "?";
+          const margin = Math.round(r.price_margin || 0);
+          const roi = r.price_roi ? (r.price_roi * 100).toFixed(0) + "%" : "—";
+
+          html += `
+            <tr>
+              <td class="commodity">${r.id_commodity || "Unknown"}</td>
+              <td class="route">${origin} → ${dest}</td>
+              <td class="profit">${margin.toLocaleString()} aUEC</td>
+              <td class="volume">${trips}</td>
+              <td>${roi}</td>
+            </tr>
+          `;
+        }
+
+        html += `</tbody></table>`;
+        resultsEl.innerHTML = html;
+        showStatus(`Showing ${routes.length} high-value routes with real traffic`, false);
+
+      } catch (err) {
+        console.error(err);
+        resultsEl.innerHTML = `<div class="empty">Failed to load data</div>`;
+        showStatus(err.message, true);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function showStatus(msg, isError) {
+      const el = document.getElementById("status");
+      el.style.display = "block";
+      el.textContent = msg;
+      el.className = "status " + (isError ? "error" : "ok");
+    }
+
+    // Optional: remember token in localStorage
+    const saved =
