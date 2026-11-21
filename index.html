@@ -37,7 +37,7 @@
       border-radius: 6px;
       font-size: 0.95rem;
     }
-    input { width: 280px; }
+    input { width: 280px; max-width: 100%; }
     button {
       background: #238636;
       border-color: #2ea043;
@@ -107,11 +107,11 @@
       </div>
       <div>
         <label>Min Profit / SCU</label>
-        <input type="number" id="minProfit" value="800" style="width:100px" />
+        <input type="number" id="minProfit" value="600" style="width:100px" />
       </div>
       <div>
-        <label>Min Trips (traffic)</label>
-        <input type="number" id="minTrips" value="3" style="width:80px" />
+        <label>Min Trips</label>
+        <input type="number" id="minTrips" value="2" style="width:80px" />
       </div>
       <button id="loadBtn" onclick="loadRoutes()">Load Best Camps</button>
     </div>
@@ -123,11 +123,13 @@
     </div>
 
     <div class="footer">
-      Personal tool • Filters for real traffic + high value • Not affiliated with CIG or UEX
+      Personal tool • High value + real traffic only
     </div>
   </div>
 
   <script>
+    // Using a CORS proxy so it works from GitHub Pages
+    const PROXY = "https://corsproxy.io/?";
     const API_BASE = "https://api.uexcorp.uk/2.0";
 
     async function loadRoutes() {
@@ -144,52 +146,50 @@
       }
 
       btn.disabled = true;
-      showStatus("Fetching routes from UEX...", false);
+      showStatus("Fetching routes...", false);
       resultsEl.innerHTML = `<div class="empty">Loading...</div>`;
 
       try {
-        // Get routes (we pull a broad set and filter client-side)
-        const res = await fetch(`${API_BASE}/commodities_routes?id_commodity=1`, {
-          headers: {
-            "Authorization": `Bearer ${token}`,
-            "Accept": "application/json"
+        // We request a few high-traffic commodities to get real routes
+        // Using a practical set that usually has activity
+        const commodityIds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30]; // broad sample
+
+        let allRoutes = [];
+
+        for (const id of commodityIds) {
+          const url = `${API_BASE}/commodities_routes?id_commodity=${id}`;
+          const res = await fetch(PROXY + encodeURIComponent(url), {
+            headers: {
+              "Authorization": `Bearer ${token}`,
+              "Accept": "application/json"
+            }
+          });
+
+          if (!res.ok) continue;
+
+          const json = await res.json();
+          if (json.status === "ok" && Array.isArray(json.data)) {
+            allRoutes = allRoutes.concat(json.data);
           }
-        });
-
-        // Note: the commodities_routes endpoint works better when you query without forcing id_commodity=1
-        // We'll do a second more useful call for ranking
-
-        // Better approach: get commodities averages / ranking style data + routes
-        // For reliability we pull commodities_routes with a known high-traffic commodity first,
-        // then expand. For a clean first version we use a practical method:
-
-        const routesRes = await fetch(`${API_BASE}/commodities_routes`, {
-          headers: {
-            "Authorization": `Bearer ${token}`,
-            "Accept": "application/json"
-          }
-        });
-
-        if (!routesRes.ok) {
-          throw new Error(`API error ${routesRes.status} – check your token`);
         }
 
-        const json = await routesRes.json();
-
-        if (json.status !== "ok" || !json.data) {
-          throw new Error(json.message || "No data returned");
-        }
-
-        let routes = json.data;
+        // Remove duplicates
+        const seen = new Set();
+        allRoutes = allRoutes.filter(r => {
+          const key = `${r.id_commodity}-${r.id_terminal_origin}-${r.id_terminal_destination}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
 
         // Filter: real traffic + decent profit
-        routes = routes.filter(r => {
+        let routes = allRoutes.filter(r => {
           const trips = (r.price_origin_users_rows || 0) + (r.price_destination_users_rows || 0);
           const margin = r.price_margin || 0;
           return trips >= minTrips && margin >= minProfit;
         });
 
-        // Sort by a combined score: profit * log(traffic)
+        // Score = profit * log(traffic)
         routes.sort((a, b) => {
           const tripsA = (a.price_origin_users_rows || 0) + (a.price_destination_users_rows || 0);
           const tripsB = (b.price_origin_users_rows || 0) + (b.price_destination_users_rows || 0);
@@ -198,24 +198,22 @@
           return scoreB - scoreA;
         });
 
-        // Keep top 40
-        routes = routes.slice(0, 40);
+        routes = routes.slice(0, 50);
 
         if (routes.length === 0) {
-          resultsEl.innerHTML = `<div class="empty">No routes matched your filters. Try lowering Min Profit or Min Trips.</div>`;
-          showStatus("No matching routes", true);
+          resultsEl.innerHTML = `<div class="empty">No routes matched. Try lowering Min Profit or Min Trips.</div>`;
+          showStatus("No matching routes found", true);
           return;
         }
 
-        // Build table
         let html = `
           <table>
             <thead>
               <tr>
-                <th>Commodity</th>
-                <th>Route</th>
+                <th>Commodity ID</th>
+                <th>Route (Origin → Dest)</th>
                 <th>Profit / SCU</th>
-                <th>Traffic (trips)</th>
+                <th>Traffic</th>
                 <th>ROI</th>
               </tr>
             </thead>
@@ -224,17 +222,15 @@
 
         for (const r of routes) {
           const trips = (r.price_origin_users_rows || 0) + (r.price_destination_users_rows || 0);
-          const origin = r.id_terminal_origin || "?";
-          const dest = r.id_terminal_destination || "?";
           const margin = Math.round(r.price_margin || 0);
           const roi = r.price_roi ? (r.price_roi * 100).toFixed(0) + "%" : "—";
 
           html += `
             <tr>
-              <td class="commodity">${r.id_commodity || "Unknown"}</td>
-              <td class="route">${origin} → ${dest}</td>
+              <td class="commodity">${r.id_commodity || "?"}</td>
+              <td class="route">${r.id_terminal_origin || "?"} → ${r.id_terminal_destination || "?"}</td>
               <td class="profit">${margin.toLocaleString()} aUEC</td>
-              <td class="volume">${trips}</td>
+              <td class="volume">${trips} trips</td>
               <td>${roi}</td>
             </tr>
           `;
@@ -246,8 +242,8 @@
 
       } catch (err) {
         console.error(err);
-        resultsEl.innerHTML = `<div class="empty">Failed to load data</div>`;
-        showStatus(err.message, true);
+        resultsEl.innerHTML = `<div class="empty">Failed to load</div>`;
+        showStatus("Error: " + err.message, true);
       } finally {
         btn.disabled = false;
       }
@@ -260,5 +256,12 @@
       el.className = "status " + (isError ? "error" : "ok");
     }
 
-    // Optional: remember token in localStorage
-    const saved =
+    // Remember token
+    const saved = localStorage.getItem("uex_token");
+    if (saved) document.getElementById("token").value = saved;
+    document.getElementById("token").addEventListener("change", e => {
+      localStorage.setItem("uex_token", e.target.value.trim());
+    });
+  </script>
+</body>
+</html>
